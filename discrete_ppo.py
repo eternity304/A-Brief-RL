@@ -1,7 +1,7 @@
 import argparse
 import os
 from distutils.util import strtobool
-import datetime
+import datetime, time
 
 import random
 import numpy as np
@@ -43,18 +43,57 @@ def main():
         run_name
     ) for i in range(args.num_envs)]) # vectorized environment, initialized by passing in an environment making function
     
-    assert isinstance(envs.single_action_space, gym.spaces.Discrete, "Only support discrete action space")
-    print("envs.single_observation_space.shape: ", envs.single_observation_space.shape)
-    print("envs.single_action_space.n: ", envs.single_action_space.n)
-    
-    observation = envs.reset()
-    episodic_return = 0
-    for _ in range(args.total_timesteps):
-        action = envs.action_space.sample()
-        observation, reward, terminated, truncated, info = envs.step(action)
-    
-        if "episode" in info.keys():
-            print(f"episodic return: {info['episode']['r'][0]}")
+    assert isinstance(envs.single_action_space, gym.spaces.Discrete), "Only support discrete action space"
+    print("envs.single_observation_space.shape:", envs.single_observation_space.shape)
+    print("envs.single_action_space.n:", envs.single_action_space.n)
+
+    agent = Agent(envs).to(device)
+    optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+
+    # Value Storage Setup
+    obs = torch.zeros((args.num_steps, args.num_envs, *envs.single_observation_space.shape)).to(device)
+    actions = torch.zeros((args.num_steps, args.num_envs, *envs.single_action_space.shape)).to(device)
+    logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+
+    global_step = 0
+    star_time = time.time()
+    next_obs = torch.Tensor(envs.reset()[0]).to(device)
+    next_done = torch.zeros(args.num_envs).to(device)
+    num_updates = args.total_timesteps // args.batch_size
+
+    for update in range(1, num_updates + 1):
+        if args.anneal_lr:
+            frac = 1.0 - (update - 1.0)/ num_updates
+            optimizer.param_groups[0]["lr"] = frac * args.learning_rate
+
+        for step in range(0, args.num_steps):
+            global_step += 1 * args.num_envs  # increment by the number of vector  environment
+            obs[step] = next_obs
+            dones[step] = next_done
+
+            with torch.no_grad():
+                action, logprob, _, value = agent.get_action_value(next_obs)
+                values[step] = value.flatten()
+            actions[step]= action
+            logprobs[step] = logprob
+
+            next_obs, reward, terminated, truncated, info = envs.step(action.cpu().numpy())
+            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            next_obs, next_done = torch.tensor(next_obs).to(device), torch.Tensor(terminated).to(device)
+            
+            if "episode" in info.keys():
+                episode_mask = info['_episode']
+                episode_reward = info['episode']['r'][episode_mask]
+                episode_length = info['episode']['l'][episode_mask]
+
+                print(f"global_step={global_step}, episodic_return={episode_reward[0]}")
+                writer.add_scalar("charts/episodic_return", episode_reward[0], global_step)
+                writer.add_scalar("charts/episodic_length", episode_length[0], global_step)
+
+
 
     envs.close()
 
@@ -98,9 +137,25 @@ def parse_args():
     parser.add_argument('--num-envs', type=int, default=4,
         help = 'the number of parallel game environment'
     )
-
-    args = parser.parse_args()
+    parser.add_argument('--num-steps', type=int, default=128,
+        help='the number of steps to run in each environment per policy rollout'
+    )
+    parser.add_argument('--anneal-lr', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
+        help='if toggled, learning rate is annealed for policy and value networks'
+    )
+    parser.add_argument('--gae', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
+        help='Use GAE for advantage computation'
+    )
+    parser.add_argument('--gamma', type=float, default=0.99,
+        help='the discount factor'
+    )
+    parser.add_argument('--gae-lambda', type=float, default=0.95,
+        help='the lambda for the general advantage estimation'
+    )
     
+    args = parser.parse_args()
+    args.batch_size = int(args.num_envs * args.num_steps)
+
     return args
 
 if __name__ == "__main__":
