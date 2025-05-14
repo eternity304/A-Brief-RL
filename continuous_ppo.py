@@ -29,7 +29,6 @@ def main():
             sync_tensorboard=True,
             config=vars(args),
             name=run_name,
-            monitor_gym=True,
             save_code=True
         )
 
@@ -218,8 +217,8 @@ def main():
     envs.close()
     writer.close()
 
-    save_path = f"{run_name}_weight.pth"
-    torch.save(model.state_dict(), save_path)
+    save_path = f"weight/{run_name}_weight.pth"
+    torch.save(agent.state_dict(), save_path)
 
 def make_env(gym_id, seed, idx, capture_video, run_name):
     def thunk():
@@ -227,8 +226,8 @@ def make_env(gym_id, seed, idx, capture_video, run_name):
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video:
             if idx == 0: # flag for only capturing video in the first sub environment 
-                env = gym.wrappers.RecordVideo(env, f"/scratch/ondemand28/harryscz/A-Brief-RL/videos/{run_name}", episode_trigger=lambda t: t % 100 == 0, fps=16)
-                env = AutoResetVideoWrapper(env)
+                env = gym.wrappers.RecordVideo(env, f"/scratch/ondemand28/harryscz/A-Brief-RL/videos/{run_name}", step_trigger=lambda t: t % 100000  == 0, fps=16)
+                # env = AutoResetVideoWrapper(env)
         env = gym.wrappers.ClipAction(env)
         env = gym.wrappers.NormalizeObservation(env)
         env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10).astype(np.float32), observation_space=env.observation_space)
@@ -240,13 +239,13 @@ def make_env(gym_id, seed, idx, capture_video, run_name):
         return env
     return thunk
 
-class AutoResetVideoWrapper(gym.Wrapper):
-    def step(self, action):
-        obs, reward, terminated, truncated, info = super().step(action)
-        # whenever the episode finishes, force a reset so RecordVideo dumps its file
-        if terminated or truncated:
-            super().reset()
-        return obs, reward, terminated, truncated, info
+# class AutoResetVideoWrapper(gym.Wrapper):
+#     def step(self, action):
+#         obs, reward, terminated, truncated, info = super().step(action)
+#         # whenever the episode finishes, force a reset so RecordVideo dumps its file
+#         if terminated or truncated:
+#             super().reset()
+#         return obs, reward, terminated, truncated, info
 
 def parse_args():
     parser = argparse.ArgumentParser()
