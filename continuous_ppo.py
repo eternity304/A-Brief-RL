@@ -56,7 +56,7 @@ def main():
         run_name
     ) for i in range(args.num_envs)]) # vectorized environment, initialized by passing in an environment making function
     
-    assert isinstance(envs.single_action_space, gym.spaces.Box), "Only support co ntinuous action space"
+    assert isinstance(envs.single_action_space, gym.spaces.Box), "Only support continuous action space"
     print("envs.single_observation_space.shape:", envs.single_observation_space.shape)
 
     agent = Agent(envs).to(device).float()
@@ -218,14 +218,17 @@ def main():
     envs.close()
     writer.close()
 
+    save_path = f"{run_name}_weight.pth"
+    torch.save(model.state_dict(), save_path)
+
 def make_env(gym_id, seed, idx, capture_video, run_name):
-    
     def thunk():
         env = gym.make(gym_id, render_mode='rgb_array')
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video:
             if idx == 0: # flag for only capturing video in the first sub environment 
-                env = gym.wrappers.RecordVideo(env, f"videos/{run_name}", episode_trigger=lambda t: t % 100 == 0, fps=16)
+                env = gym.wrappers.RecordVideo(env, f"/scratch/ondemand28/harryscz/A-Brief-RL/videos/{run_name}", episode_trigger=lambda t: t % 100 == 0, fps=16)
+                env = AutoResetVideoWrapper(env)
         env = gym.wrappers.ClipAction(env)
         env = gym.wrappers.NormalizeObservation(env)
         env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10).astype(np.float32), observation_space=env.observation_space)
@@ -237,6 +240,13 @@ def make_env(gym_id, seed, idx, capture_video, run_name):
         return env
     return thunk
 
+class AutoResetVideoWrapper(gym.Wrapper):
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        # whenever the episode finishes, force a reset so RecordVideo dumps its file
+        if terminated or truncated:
+            super().reset()
+        return obs, reward, terminated, truncated, info
 
 def parse_args():
     parser = argparse.ArgumentParser()
